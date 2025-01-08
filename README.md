@@ -1,51 +1,88 @@
-# Spring Boot Hello World
+Based on the code, when the transaction code (trncode) is "5" and it's a Lapse operation, here are the key functionalities:
 
-**A simple Spring Boot 2.x app to send hello world message to a user**
-
-## How to Run Application
-
-**Start the application using any of the commands mentioned below**
-
-> **Note:** First two commands need to run inside the root folder of this project i.e inside the **spring-boot-hello-world** folder
+Initial Checks and Setup:
 
 
-- **Using maven** <br/>``` mvn spring-boot:run```
+First checks if the policy already exists in the system by looking at the policy count
+If policy exists, checks for any existing claims on the policy
+Validates the broker code and gets the writing office (wo) number
+For homeowner policies, uses a special broker office number from system configuration
 
 
-- **From jar file**
-  Create a jar file using '**mvn clean install**' command and then execute
-  <br/>```java -jar target/spring-boot-2-hello-world-1.0.2-SNAPSHOT.jar```
+Policy Handling:
 
 
-- **Directly from IDE**
-  <br/>```Right click on HelloWorldApplication.java and click on 'Run' option```
-  <br/><br/>
+If a previous policy exists (countpol > 0):
 
-> **Note:** By default spring boot application starts on port number 8080. If port 8080 is occupied in your system then you can change the port number by uncommenting and updating the **server.port** property inside the **application.properties** file that is available inside the **src > main > resources** folder.
-
-<br/>
-
-**Send an HTTP GET request to '/hello' endpoint using any of the two methods**
-
-- **Browser or REST client**
-  <br/>```http://localhost:8080/hello```
+Calls the Lapse(edirecno) method to process the lapse
 
 
-- **cURL**
-  <br/>```curl --request GET 'http://localhost:8080/hello'```
+If no previous policy exists (countpol == 0):
+
+Calls Lapse("NR", edirecno) to create a new lapsed policy
 
 
-## How to Run Unit Test Cases
-
-**Run the test cases using any of the commands mentioned below**
-
-> **Note:** These commands need to run inside the root folder of this project i.e inside the **spring-boot-hello-world** folder
-
-- **To run all the test cases**
-  <br/>```mvn test```
 
 
-- **To run a particular test class**
-  <br/>```mvn -Dtest=HelloWorldControllerTest test```
-  <br/>or
-  <br/>```mvn -Dtest=HelloWorldApplicationTests test```
+The Lapse() Method Key Functions:
+
+
+Creates a new policy version with status "Not Renewed" (NR)
+Sets all policy values:
+javaCopyif (trncode.equals("NR")) {
+    ht_pol.put("effdate", EDI_IICESUtil.dateDBToTimestamp(rs_policy.getString("edieffdate")));
+    ht_pol.put("expdate", EDI_IICESUtil.dateDBToTimestamp(rs_policy.getString("ediexpdate")));
+    ht_pol.put("termprem", new Integer(0)); // Sets premium to 0
+    ht_pol.put("prem", new Integer(0));
+    ht_pol.put("comm", new Double(0.00));
+}
+
+
+
+Additional Processing:
+
+
+Updates policy history with "MANDATORY NOT RENEWED" status
+Creates/updates necessary database records:
+
+MSFOLDER (folder information)
+TSMAILER (mailing information)
+TSFNAME (name information)
+MSPOLICY (policy information)
+TSTRAN (transaction information)
+MSPOLHIST (policy history)
+
+
+
+
+Location Handling:
+
+
+For non-standard policies:
+
+Updates location information
+Updates province splits
+Updates coverage information
+Creates necessary invoicing records
+
+
+
+
+Final Steps:
+
+
+Updates the EDIPOLICY table with new status
+Logs the lapse transaction
+Updates folder expiry dates
+Marks folder as inactive
+
+The key purpose is to:
+
+Process the policy as "Not Renewed"
+Set premiums to zero
+Update all related records to reflect the lapsed status
+Maintain historical records of the lapse
+Handle any location or coverage changes
+Generate appropriate logs and notifications
+
+This represents a complete termination of the policy through non-renewal rather than cancellation.
