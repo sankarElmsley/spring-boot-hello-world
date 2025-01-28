@@ -22,197 +22,204 @@ class HelloWorldApplicationTests {
 }
 
 
+/**
+ * Model for Policy Value
+ */
+@Data
+@Builder
+public class PolicyValue {
+    private String pvLineNo;
+    private String pvCoverage;
+    private String pvTpremium;
+    private String pvAPremium;
+    private String pvLimit;
+    private String pvDeduct;
+    private String pvCommission;
+}
+
+/**
+ * Service to process policy values and determine coverage types
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class SGILocationProcessor {
+public class ModernPolicyValueProcessor {
     
-    private final SGILocationService locationService;
-    private final LocationValueGenerator locationValueGenerator;
+    private String combinedProdType = "";
+    private boolean isOptAndDc = false;
 
     /**
-     * Main processing method that handles the complete location processing flow
+     * Process list of PolicyValue objects to check coverage types
      */
-    public Map<Location, List<EDILocationValue>> processLocation(FieldSet fieldSet, String recNo) {
-        try {
-            // 1. Determine location type
-            LocationType locationType = determineLocationType(fieldSet);
-            
-            // 2. Create multiple locations based on coverage types
-            List<Location> locations = createLocations(fieldSet, locationType);
-            
-            // 3. Generate location values for each location
-            Map<Location, List<EDILocationValue>> locationValuesMap = new HashMap<>();
-            
-            for (Location location : locations) {
-                List<EDILocationValue> values = locationValueGenerator.generateLocationValues(location, recNo);
-                locationValuesMap.put(location, values);
-            }
-            
-            return locationValuesMap;
-            
-        } catch (Exception e) {
-            log.error("Error processing location for recNo {}: {}", recNo, e.getMessage());
-            throw new LocationProcessingException("Failed to process location", e);
-        }
-    }
-
-    /**
-     * Creates multiple locations based on coverage types
-     */
-    private List<Location> createLocations(FieldSet fieldSet, LocationType locationType) {
-        List<Location> locations = new ArrayList<>();
+    public void checkProductInCoverageSection(List<PolicyValue> policyValues) {
+        log.debug("Analyzing {} policy values for coverage types", policyValues.size());
         
-        if (locationType == LocationType.HOMEOWNER) {
-            locations.addAll(createHomeownerLocations(fieldSet));
+        // Reset state
+        combinedProdType = "";
+        isOptAndDc = false;
+
+        // Process coverages
+        Map<String, String> coverageMap = policyValues.stream()
+            .map(PolicyValue::getPvCoverage)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toMap(
+                this::mapCoverageTypeCode,
+                coverage -> coverage,
+                (existing, replacement) -> existing,
+                LinkedHashMap::new
+            ));
+
+        // If coverages found, build combined type
+        if (!coverageMap.isEmpty()) {
+            combinedProdType = coverageMap.keySet().stream()
+                .filter(key -> !key.equals("UNKNOWN"))
+                .sorted()
+                .collect(Collectors.joining());
+            isOptAndDc = true;
+
+            log.info("Found cyber coverages: {}, Combined type: {}", 
+                    coverageMap.values(), combinedProdType);
         } else {
-            locations.addAll(createCommercialLocations(fieldSet));
+            log.info("No cyber coverages found in policy values");
         }
-        
-        return locations;
     }
 
     /**
-     * Creates Homeowner locations based on coverage types (HSP, SLC, or both)
+     * Map coverage description to type code
      */
-    private List<Location> createHomeownerLocations(FieldSet fieldSet) {
-        List<Location> locations = new ArrayList<>();
-        
-        // Create base location from fieldset
-        Location baseLocation = locationService.createLocation(fieldSet, LocationType.HOMEOWNER);
-        
-        // Check HSP values
-        boolean hasHSP = hasValidHSPValues(baseLocation);
-        // Check SLC values
-        boolean hasSLC = hasValidSLCValues(baseLocation);
-        
-        if (hasHSP && hasSLC) {
-            // Create separate locations for HSP and SLC
-            locations.add(createHSPLocation(baseLocation));
-            locations.add(createSLCLocation(baseLocation));
-        } else if (hasHSP) {
-            locations.add(createHSPLocation(baseLocation));
-        } else if (hasSLC) {
-            locations.add(createSLCLocation(baseLocation));
-        }
-        
-        return locations;
+    private String mapCoverageTypeCode(String coverage) {
+        if (coverage.contains("RespEx")) return "DC1";
+        if (coverage.contains("DefLia")) return "DC3";
+        if (coverage.contains("ComAtt")) return "C1";
+        if (coverage.contains("NetLia")) return "C3";
+        return "UNKNOWN";
     }
 
     /**
-     * Creates Commercial locations based on BI Forms
+     * Get policy type based on coverage combinations
      */
-    private List<Location> createCommercialLocations(FieldSet fieldSet) {
-        List<Location> locations = new ArrayList<>();
-        
-        // Create base location from fieldset
-        Location baseLocation = locationService.createLocation(fieldSet, LocationType.COMMERCIAL);
-        
-        // Check each BI Form and create separate location if valid
-        if (hasValidBIForm(baseLocation.getLocBIForm1(), baseLocation.getLocBILimit1())) {
-            locations.add(createBIFormLocation(baseLocation, 1));
-        }
-        
-        if (hasValidBIForm(baseLocation.getLocBIForm2(), baseLocation.getLocBILimit2())) {
-            locations.add(createBIFormLocation(baseLocation, 2));
-        }
-        
-        if (hasValidBIForm(baseLocation.getLocBIForm3(), baseLocation.getLocBILimit3())) {
-            locations.add(createBIFormLocation(baseLocation, 3));
-        }
-        
-        // Continue for BI Forms 4-6
-        if (hasValidBIForm(baseLocation.getLocBIForm4(), baseLocation.getLocBILimit4())) {
-            locations.add(createBIFormLocation(baseLocation, 4));
-        }
-        
-        if (hasValidBIForm(baseLocation.getLocBIForm5(), baseLocation.getLocBILimit5())) {
-            locations.add(createBIFormLocation(baseLocation, 5));
-        }
-        
-        if (hasValidBIForm(baseLocation.getLocBIForm6(), baseLocation.getLocBILimit6())) {
-            locations.add(createBIFormLocation(baseLocation, 6));
-        }
-        
-        return locations;
-    }
-
-    private Location createHSPLocation(Location baseLocation) {
-        return Location.builder()
-            .lineName(baseLocation.getLineName())
-            .lineNumber(baseLocation.getLineNumber())
-            // Copy all base location fields
-            // ...
-            .locBMCov(SGIConstants.HSP)
-            .locHSPFTPrem(baseLocation.getLocHSPFTPrem())
-            .locHSPPremWrit(baseLocation.getLocHSPPremWrit())
-            .locHSPComm(baseLocation.getLocHSPComm())
-            .locHSPDeduct(baseLocation.getLocHSPDeduct())
-            .locHSPLimit(baseLocation.getLocHSPLimit())
-            .locationType(LocationType.HOMEOWNER)
-            .build();
-    }
-
-    private Location createSLCLocation(Location baseLocation) {
-        return Location.builder()
-            .lineName(baseLocation.getLineName())
-            .lineNumber(baseLocation.getLineNumber())
-            // Copy all base location fields
-            // ...
-            .locBMCov(SGIConstants.SLC)
-            .locSLCFTPrem(baseLocation.getLocSLCFTPrem())
-            .locSLCPremWrit(baseLocation.getLocSLCPremWrit())
-            .locSLCComm(baseLocation.getLocSLCComm())
-            .locSLCDeduct(baseLocation.getLocSLCDeduct())
-            .locSLCLimit(baseLocation.getLocSLCLimit())
-            .locationType(LocationType.HOMEOWNER)
-            .build();
-    }
-
-    private Location createBIFormLocation(Location baseLocation, int formNumber) {
-        Location.LocationBuilder builder = Location.builder()
-            .lineName(baseLocation.getLineName())
-            .lineNumber(baseLocation.getLineNumber())
-            // Copy all base location fields
-            // ...
-            .locationType(LocationType.COMMERCIAL);
-
-        // Set specific BI form details
-        switch (formNumber) {
-            case 1:
-                builder.locBIForm1(baseLocation.getLocBIForm1())
-                      .locBILimit1(baseLocation.getLocBILimit1());
-                break;
-            case 2:
-                builder.locBIForm2(baseLocation.getLocBIForm2())
-                      .locBILimit2(baseLocation.getLocBILimit2());
-                break;
-            // Continue for forms 3-6
+    public PolicyType determinePolicyType() {
+        if (!isOptAndDc) {
+            return PolicyType.STANDARD;
         }
 
-        return builder.build();
+        if (combinedProdType.length() > 3 && 
+            !combinedProdType.equals("DC1DC3") && 
+            !combinedProdType.equals("C1C3")) {
+            return PolicyType.COMBINED_DC_CF;
+        } else if (combinedProdType.matches("DC[13]|DC1DC3")) {
+            return PolicyType.DATA_COMPROMISE;
+        } else if (combinedProdType.matches("C[13]|C1C3")) {
+            return PolicyType.CYBER_FIRST;
+        }
+        
+        return PolicyType.STANDARD;
     }
 
-    private boolean hasValidHSPValues(Location location) {
-        return location.getLocHSPFTPrem() != null && 
-               location.getLocHSPPremWrit() != null;
+    /**
+     * Get suffix based on policy type
+     */
+    public String determinePolicySuffix() {
+        return switch (determinePolicyType()) {
+            case COMBINED_DC_CF -> "-Z";
+            case DATA_COMPROMISE -> "-D";
+            case CYBER_FIRST -> "-Y";
+            default -> "";
+        };
     }
 
-    private boolean hasValidSLCValues(Location location) {
-        return location.getLocSLCFTPrem() != null && 
-               location.getLocSLCPremWrit() != null;
+    public String getCombinedProdType() {
+        return combinedProdType;
     }
 
-    private boolean hasValidBIForm(String form, Double limit) {
-        return StringUtils.isNotEmpty(form) && limit != null;
-    }
-
-    private LocationType determineLocationType(FieldSet fieldSet) {
-        String packageType = fieldSet.readString("PolPackType");
-        boolean isHomeowner = SGIConstants.HOMEOWNER_PACKAGE_TYPES.contains(packageType);
-        return isHomeowner ? LocationType.HOMEOWNER : LocationType.COMMERCIAL;
+    public boolean isOptAndDc() {
+        return isOptAndDc;
     }
 }
 
+/**
+ * Enum for policy types
+ */
+public enum PolicyType {
+    STANDARD,
+    DATA_COMPROMISE,
+    CYBER_FIRST,
+    COMBINED_DC_CF
+}
 
+/**
+ * Example usage in main processing class
+ */
+@Slf4j
+public class PolicyProcessor {
+    
+    private final ModernPolicyValueProcessor policyValueProcessor;
+    
+    public void processPolicy(List<PolicyValue> policyValues) {
+        // Analyze coverages
+        policyValueProcessor.checkProductInCoverageSection(policyValues);
+        
+        // If cyber coverages found
+        if (policyValueProcessor.isOptAndDc()) {
+            PolicyType policyType = policyValueProcessor.determinePolicyType();
+            String suffix = policyValueProcessor.determinePolicySuffix();
+            
+            log.info("Processing split policy - Type: {}, Suffix: {}, Combined Type: {}", 
+                    policyType, 
+                    suffix,
+                    policyValueProcessor.getCombinedProdType());
 
+            // Handle split policy based on type...
+            processSplitPolicy(policyValues, policyType, suffix);
+        } else {
+            log.info("Processing standard policy");
+            processStandardPolicy(policyValues);
+        }
+    }
+
+    private void processSplitPolicy(List<PolicyValue> policyValues, PolicyType type, String suffix) {
+        // Implementation for split policy processing
+    }
+
+    private void processStandardPolicy(List<PolicyValue> policyValues) {
+        // Implementation for standard policy processing
+    }
+}
+
+// Example test data and usage
+public class Example {
+    public static void main(String[] args) {
+        List<PolicyValue> policyValues = Arrays.asList(
+            PolicyValue.builder()
+                .pvLineNo("PV001")
+                .pvCoverage("RespEx")
+                .pvTpremium("45")
+                .pvAPremium("45")
+                .pvLimit("25000")
+                .pvDeduct("1000")
+                .pvCommission("30.0000")
+                .build(),
+            PolicyValue.builder()
+                .pvLineNo("PV002")
+                .pvCoverage("DefLia")
+                .pvTpremium("51")
+                .pvAPremium("51")
+                .pvLimit("25000")
+                .pvDeduct("1000")
+                .pvCommission("30.0000")
+                .build()
+            // ... more policy values
+        );
+
+        ModernPolicyValueProcessor processor = new ModernPolicyValueProcessor();
+        processor.checkProductInCoverageSection(policyValues);
+        
+        if (processor.isOptAndDc()) {
+            String suffix = processor.determinePolicySuffix();
+            PolicyType type = processor.determinePolicyType();
+            System.out.println("Policy Type: " + type);
+            System.out.println("Suffix: " + suffix);
+            System.out.println("Combined Type: " + processor.getCombinedProdType());
+        }
+    }
+}
