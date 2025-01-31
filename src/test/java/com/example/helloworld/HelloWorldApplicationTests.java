@@ -307,91 +307,153 @@ public class ProductTypeDeterminer {
 
 
 
+public class SGILocationProcessor {
+    private static final String PATH = "your/log/path";  // Match your logging path
 
-import java.util.List;
-import java.util.Map;
-import java.util.HashMap;
-import java.util.stream.Collectors;
-
-public class LocationCommissionProcessor {
-    private static final String LOG_PATH = "path/to/logs"; // Configure as needed
-    
-    // Represents a location entry
-    public static class LocationEntry {
-        private final double commission;
-        private final double premium;
-        
-        public LocationEntry(double commission, double premium) {
-            this.commission = commission;
-            this.premium = premium;
-        }
-        
-        public double getCommission() {
-            return commission;
-        }
-        
-        public double getPremium() {
-            return premium;
-        }
-    }
-    
     /**
-     * Calculate commission data from policy locations
-     * @param policy The policy object containing location data
-     * @return Map containing commission rates and premiums
+     * Sets commission data in the provided Hashtable, matching the original DB query functionality
+     * but using Policy object instead of database connection
      */
-    public Map<String, Double> calculateCommission(Policy policy) {
+    public void setCommission(Policy policy, Hashtable ht) {
         try {
-            Map<String, Double> result = new HashMap<>();
-            
             // Group locations by commission rate and sum their premiums
-            Map<Double, Double> commissionGroups = policy.getLocations().stream()
-                .collect(Collectors.groupingBy(
-                    Location::getCommissionRate,
-                    Collectors.summingDouble(Location::getPremium)
-                ));
+            Map<Double, Double> commissionGroups = new HashMap<>();
             
-            // Convert to the expected format with indexed keys
-            int index = 0;
-            for (Map.Entry<Double, Double> entry : commissionGroups.entrySet()) {
-                result.put("feerate" + index, entry.getKey());
-                result.put("premium" + index, entry.getValue());
-                index++;
+            // Iterate through all locations and their values
+            for (Location location : policy.getLocations()) {
+                for (LocationValue value : location.getLocationValues()) {
+                    double commission = value.getCommissionRate();
+                    double premium = value.getPremium();
+                    
+                    // Sum premiums for each commission rate
+                    commissionGroups.merge(commission, premium, Double::sum);
+                }
             }
             
-            return result;
-            
+            // Populate the Hashtable exactly as in the original implementation
+            int i = 0;
+            for (Map.Entry<Double, Double> entry : commissionGroups.entrySet()) {
+                ht.put("feerate" + i, entry.getKey());    // ediloccommission
+                ht.put("premium" + i, entry.getValue());   // edilocpremium
+                i++;
+            }
         } catch (Exception e) {
-            Logger.error("Error calculating commission", e);
-            throw new CommissionCalculationException("Failed to calculate commission", e);
-        }
-    }
-    
-    /**
-     * Alternative version that returns structured data instead of flat map
-     * @param policy The policy object containing location data
-     * @return List of LocationEntry objects containing commission and premium data
-     */
-    public List<LocationEntry> calculateCommissionStructured(Policy policy) {
-        try {
-            return policy.getLocations().stream()
-                .collect(Collectors.groupingBy(
-                    Location::getCommissionRate,
-                    Collectors.summingDouble(Location::getPremium)
-                ))
-                .entrySet().stream()
-                .map(entry -> new LocationEntry(entry.getKey(), entry.getValue()))
-                .collect(Collectors.toList());
-                
-        } catch (Exception e) {
-            Logger.error("Error calculating structured commission", e);
-            throw new CommissionCalculationException("Failed to calculate structured commission", e);
+            // Match the original error logging
+            EDI_IICESUtil.logFile(PATH, "ERROR: IICESSGI_Util: setCommission ", e);
         }
     }
 }
 
-class CommissionCalculationException extends RuntimeException {
-    public CommissionCalculationException(String message, Throwable cause) {
-        super(message, cause);
+// Example usage with test data
+public class TestSGILocationProcessor {
+    public static void main(String[] args) {
+        // Create test data
+        Policy policy = new Policy("TEST-POL-001");
+        
+        // Location 1 with commission rate 0.15
+        Location loc1 = new Location("LOC1", "Address 1");
+        loc1.addLocationValue(new LocationValue(0.15, 1000.0, "Property"));
+        loc1.addLocationValue(new LocationValue(0.15, 500.0, "Liability"));
+        policy.addLocation(loc1);
+        
+        // Location 2 with commission rate 0.12
+        Location loc2 = new Location("LOC2", "Address 2");
+        loc2.addLocationValue(new LocationValue(0.12, 2000.0, "Property"));
+        loc2.addLocationValue(new LocationValue(0.12, 750.0, "Liability"));
+        policy.addLocation(loc2);
+        
+        // Create processor and test
+        SGILocationProcessor processor = new SGILocationProcessor();
+        Hashtable<String, Double> ht = new Hashtable<>();
+        processor.setCommission(policy, ht);
+        
+        // Print results
+        System.out.println("Results in Hashtable:");
+        int i = 0;
+        while (ht.containsKey("feerate" + i)) {
+            System.out.printf("Commission Rate %d: %.2f%%, Premium: $%.2f%n",
+                i + 1,
+                ht.get("feerate" + i) * 100,
+                ht.get("premium" + i));
+            i++;
+        }
     }
 }
+
+/* Example output:
+Results in Hashtable:
+Commission Rate 1: 15.00%, Premium: $1500.00
+Commission Rate 2: 12.00%, Premium: $2750.00
+*/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+public class SGILocationProcessor {
+    private static final String PATH = "your/log/path";
+
+    public void setCommission(Policy policy, Hashtable ht) {
+        try {
+            // This Map serves as our GROUP BY ediloccommission
+            // - Key (Double) = commission rate (equivalent to ediloccommission in SQL)
+            // - Value (Double) = sum of premiums (equivalent to sum(edilocpremium) in SQL)
+            Map<Double, Double> commissionGroups = new HashMap<>();
+            
+            // This loop is equivalent to the SQL grouping operation
+            for (Location location : policy.getLocations()) {
+                for (LocationValue value : location.getLocationValues()) {
+                    double commissionRate = value.getCommissionRate();  // This is our "ediloccommission"
+                    double premium = value.getPremium();                // This is our "edilocpremium"
+                    
+                    // This merge operation is equivalent to GROUP BY with SUM
+                    // If the commission rate exists, add to its sum
+                    // If it doesn't exist, create new entry
+                    commissionGroups.merge(commissionRate, premium, Double::sum);
+                    
+                    // The above merge is equivalent to this SQL:
+                    // GROUP BY ediloccommission
+                    // SUM(edilocpremium)
+                }
+            }
+            
+            // Now populate the Hashtable from our grouped data
+            int i = 0;
+            for (Map.Entry<Double, Double> entry : commissionGroups.entrySet()) {
+                ht.put("feerate" + i, entry.getKey());    // ediloccommission
+                ht.put("premium" + i, entry.getValue());   // sum(edilocpremium)
+                i++;
+            }
+            
+        } catch (Exception e) {
+            EDI_IICESUtil.logFile(PATH, "ERROR: IICESSGI_Util: setCommission ", e);
+        }
+    }
+}
+
+/*
+For reference, the original SQL was:
+SELECT ediloccommission, sum(edilocpremium) edilocpremium
+FROM dbo.edilocval
+WHERE edirecno = ?
+GROUP BY ediloccommission
+
+The equivalency is:
+1. ediloccommission = LocationValue.getCommissionRate()
+2. edilocpremium = LocationValue.getPremium()
+3. GROUP BY = HashMap with commission rate as key
+4. SUM() = HashMap.merge() with Double::sum
+*/
