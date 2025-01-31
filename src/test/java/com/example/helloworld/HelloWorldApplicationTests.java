@@ -304,3 +304,94 @@ public class ProductTypeDeterminer {
         }
     }
 }
+
+
+
+
+import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.stream.Collectors;
+
+public class LocationCommissionProcessor {
+    private static final String LOG_PATH = "path/to/logs"; // Configure as needed
+    
+    // Represents a location entry
+    public static class LocationEntry {
+        private final double commission;
+        private final double premium;
+        
+        public LocationEntry(double commission, double premium) {
+            this.commission = commission;
+            this.premium = premium;
+        }
+        
+        public double getCommission() {
+            return commission;
+        }
+        
+        public double getPremium() {
+            return premium;
+        }
+    }
+    
+    /**
+     * Calculate commission data from policy locations
+     * @param policy The policy object containing location data
+     * @return Map containing commission rates and premiums
+     */
+    public Map<String, Double> calculateCommission(Policy policy) {
+        try {
+            Map<String, Double> result = new HashMap<>();
+            
+            // Group locations by commission rate and sum their premiums
+            Map<Double, Double> commissionGroups = policy.getLocations().stream()
+                .collect(Collectors.groupingBy(
+                    Location::getCommissionRate,
+                    Collectors.summingDouble(Location::getPremium)
+                ));
+            
+            // Convert to the expected format with indexed keys
+            int index = 0;
+            for (Map.Entry<Double, Double> entry : commissionGroups.entrySet()) {
+                result.put("feerate" + index, entry.getKey());
+                result.put("premium" + index, entry.getValue());
+                index++;
+            }
+            
+            return result;
+            
+        } catch (Exception e) {
+            Logger.error("Error calculating commission", e);
+            throw new CommissionCalculationException("Failed to calculate commission", e);
+        }
+    }
+    
+    /**
+     * Alternative version that returns structured data instead of flat map
+     * @param policy The policy object containing location data
+     * @return List of LocationEntry objects containing commission and premium data
+     */
+    public List<LocationEntry> calculateCommissionStructured(Policy policy) {
+        try {
+            return policy.getLocations().stream()
+                .collect(Collectors.groupingBy(
+                    Location::getCommissionRate,
+                    Collectors.summingDouble(Location::getPremium)
+                ))
+                .entrySet().stream()
+                .map(entry -> new LocationEntry(entry.getKey(), entry.getValue()))
+                .collect(Collectors.toList());
+                
+        } catch (Exception e) {
+            Logger.error("Error calculating structured commission", e);
+            throw new CommissionCalculationException("Failed to calculate structured commission", e);
+        }
+    }
+}
+
+class CommissionCalculationException extends RuntimeException {
+    public CommissionCalculationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
