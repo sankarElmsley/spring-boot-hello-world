@@ -22,204 +22,172 @@ class HelloWorldApplicationTests {
 }
 
 
-/**
- * Model for Policy Value
- */
-@Data
-@Builder
-public class PolicyValue {
-    private String pvLineNo;
-    private String pvCoverage;
-    private String pvTpremium;
-    private String pvAPremium;
-    private String pvLimit;
-    private String pvDeduct;
-    private String pvCommission;
-}
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Optional;
+import lombok.extern.slf4j.Slf4j;
 
-/**
- * Service to process policy values and determine coverage types
- */
 @Slf4j
-@Service
-@RequiredArgsConstructor
-public class ModernPolicyValueProcessor {
+public class ProductMapper {
     
-    private String combinedProdType = "";
-    private boolean isOptAndDc = false;
-
-    /**
-     * Process list of PolicyValue objects to check coverage types
-     */
-    public void checkProductInCoverageSection(List<PolicyValue> policyValues) {
-        log.debug("Analyzing {} policy values for coverage types", policyValues.size());
-        
-        // Reset state
-        combinedProdType = "";
-        isOptAndDc = false;
-
-        // Process coverages
-        Map<String, String> coverageMap = policyValues.stream()
-            .map(PolicyValue::getPvCoverage)
-            .filter(Objects::nonNull)
-            .collect(Collectors.toMap(
-                this::mapCoverageTypeCode,
-                coverage -> coverage,
-                (existing, replacement) -> existing,
-                LinkedHashMap::new
-            ));
-
-        // If coverages found, build combined type
-        if (!coverageMap.isEmpty()) {
-            combinedProdType = coverageMap.keySet().stream()
-                .filter(key -> !key.equals("UNKNOWN"))
-                .sorted()
-                .collect(Collectors.joining());
-            isOptAndDc = true;
-
-            log.info("Found cyber coverages: {}, Combined type: {}", 
-                    coverageMap.values(), combinedProdType);
-        } else {
-            log.info("No cyber coverages found in policy values");
-        }
-    }
-
-    /**
-     * Map coverage description to type code
-     */
-    private String mapCoverageTypeCode(String coverage) {
-        if (coverage.contains("RespEx")) return "DC1";
-        if (coverage.contains("DefLia")) return "DC3";
-        if (coverage.contains("ComAtt")) return "C1";
-        if (coverage.contains("NetLia")) return "C3";
-        return "UNKNOWN";
-    }
-
-    /**
-     * Get policy type based on coverage combinations
-     */
-    public PolicyType determinePolicyType() {
-        if (!isOptAndDc) {
-            return PolicyType.STANDARD;
-        }
-
-        if (combinedProdType.length() > 3 && 
-            !combinedProdType.equals("DC1DC3") && 
-            !combinedProdType.equals("C1C3")) {
-            return PolicyType.COMBINED_DC_CF;
-        } else if (combinedProdType.matches("DC[13]|DC1DC3")) {
-            return PolicyType.DATA_COMPROMISE;
-        } else if (combinedProdType.matches("C[13]|C1C3")) {
-            return PolicyType.CYBER_FIRST;
-        }
-        
-        return PolicyType.STANDARD;
-    }
-
-    /**
-     * Get suffix based on policy type
-     */
-    public String determinePolicySuffix() {
-        return switch (determinePolicyType()) {
-            case COMBINED_DC_CF -> "-Z";
-            case DATA_COMPROMISE -> "-D";
-            case CYBER_FIRST -> "-Y";
-            default -> "";
-        };
-    }
-
-    public String getCombinedProdType() {
-        return combinedProdType;
-    }
-
-    public boolean isOptAndDc() {
-        return isOptAndDc;
-    }
-}
-
-/**
- * Enum for policy types
- */
-public enum PolicyType {
-    STANDARD,
-    DATA_COMPROMISE,
-    CYBER_FIRST,
-    COMBINED_DC_CF
-}
-
-/**
- * Example usage in main processing class
- */
-@Slf4j
-public class PolicyProcessor {
+    private final Connection connection;
+    private final Map<String, String> productMappings;
     
-    private final ModernPolicyValueProcessor policyValueProcessor;
+    @Data
+    @Builder
+    public static class Policy {
+        private String policyNumber;
+        private String bmType;
+        private String bmTypeCov;
+        private int recno;
+        private String packType;
+    }
     
-    public void processPolicy(List<PolicyValue> policyValues) {
-        // Analyze coverages
-        policyValueProcessor.checkProductInCoverageSection(policyValues);
+    public ProductMapper(Connection connection, Map<String, String> existingProductMappings) {
+        this.connection = connection;
+        this.productMappings = existingProductMappings;
+    }
+    
+    /**
+     * Maps a policy to its product ID using pre-loaded mappings and business rules
+     */
+    public String mapProduct(Policy policy) {
+        String productId = "";
         
-        // If cyber coverages found
-        if (policyValueProcessor.isOptAndDc()) {
-            PolicyType policyType = policyValueProcessor.determinePolicyType();
-            String suffix = policyValueProcessor.determinePolicySuffix();
+        try {
+            // First check if we have a direct mapping
+            if (policy.getBmType() != null) {
+                productId = productMappings.get(policy.getBmType());
+            }
             
-            log.info("Processing split policy - Type: {}, Suffix: {}, Combined Type: {}", 
-                    policyType, 
-                    suffix,
-                    policyValueProcessor.getCombinedProdType());
-
-            // Handle split policy based on type...
-            processSplitPolicy(policyValues, policyType, suffix);
-        } else {
-            log.info("Processing standard policy");
-            processStandardPolicy(policyValues);
+            // If no direct mapping found, apply business rules
+            if (productId == null || productId.isEmpty()) {
+                productId = determineProductByBusinessRules(policy);
+            }
+            
+            log.info("Mapped policy {} to product {}", policy.getPolicyNumber(), productId);
+            
+        } catch (Exception e) {
+            log.error("Product mapping failed for policy: {}", policy.getPolicyNumber(), e);
+            throw new ProductMappingException("Error mapping product", e);
         }
-    }
-
-    private void processSplitPolicy(List<PolicyValue> policyValues, PolicyType type, String suffix) {
-        // Implementation for split policy processing
-    }
-
-    private void processStandardPolicy(List<PolicyValue> policyValues) {
-        // Implementation for standard policy processing
-    }
-}
-
-// Example test data and usage
-public class Example {
-    public static void main(String[] args) {
-        List<PolicyValue> policyValues = Arrays.asList(
-            PolicyValue.builder()
-                .pvLineNo("PV001")
-                .pvCoverage("RespEx")
-                .pvTpremium("45")
-                .pvAPremium("45")
-                .pvLimit("25000")
-                .pvDeduct("1000")
-                .pvCommission("30.0000")
-                .build(),
-            PolicyValue.builder()
-                .pvLineNo("PV002")
-                .pvCoverage("DefLia")
-                .pvTpremium("51")
-                .pvAPremium("51")
-                .pvLimit("25000")
-                .pvDeduct("1000")
-                .pvCommission("30.0000")
-                .build()
-            // ... more policy values
-        );
-
-        ModernPolicyValueProcessor processor = new ModernPolicyValueProcessor();
-        processor.checkProductInCoverageSection(policyValues);
         
-        if (processor.isOptAndDc()) {
-            String suffix = processor.determinePolicySuffix();
-            PolicyType type = processor.determinePolicyType();
-            System.out.println("Policy Type: " + type);
-            System.out.println("Suffix: " + suffix);
-            System.out.println("Combined Type: " + processor.getCombinedProdType());
+        return productId;
+    }
+    
+    /**
+     * Determines product ID based on business rules
+     */
+    private String determineProductByBusinessRules(Policy policy) {
+        // Handle B or U type policies per CR#1538
+        if ("B".equals(policy.getBmType()) || "U".equals(policy.getBmType())) {
+            return "R1400";
         }
+        
+        // Handle S type policies
+        if ("S".equals(policy.getBmTypeCov())) {
+            return "RTF18";
+        }
+        
+        // Complex type determination based on bmTypeCov and bmType combination
+        if (policy.getBmTypeCov() != null && policy.getBmType() != null) {
+            String combinedType = policy.getBmTypeCov() + "/" + policy.getBmType();
+            
+            // Check invalid combinations
+            if ("U/F-3".equals(combinedType)) {
+                throw new ProductMappingException(
+                    "Invalid Type Coverage PolBMTypeCov/PolBMType combination: " + combinedType,
+                    null
+                );
+            }
+            
+            // Check if we have a mapping for the combined type
+            String mappedProduct = productMappings.get(combinedType);
+            if (mappedProduct != null) {
+                return mappedProduct;
+            }
+        }
+        
+        // Check for cyber product types (based on your specific business rules)
+        if (isCyberProduct(policy.getBmType())) {
+            return determineCyberProductType(policy);
+        }
+        
+        // Default product type if no other rules match
+        return "RTF18";
+    }
+    
+    private boolean isCyberProduct(String bmType) {
+        if (bmType == null) return false;
+        return bmType.contains("DC1") || bmType.contains("DC3") || 
+               bmType.contains("C1") || bmType.contains("C3");
+    }
+    
+    private String determineCyberProductType(Policy policy) {
+        String bmType = policy.getBmType();
+        
+        // Combined product types
+        if (bmType.contains("DC1") && bmType.contains("DC3")) {
+            return "RTF321"; // Example - adjust according to your rules
+        }
+        
+        if (bmType.contains("C1") && bmType.contains("C3")) {
+            return "RTF322"; // Example - adjust according to your rules
+        }
+        
+        // Single product types
+        if (bmType.contains("DC1") || bmType.contains("DC3")) {
+            return "RTF323"; // Example - adjust according to your rules
+        }
+        
+        return "RTF18"; // Default fallback
+    }
+    
+    /**
+     * Updates the product mappings cache
+     */
+    public void updateProductMappings(Map<String, String> newMappings) {
+        productMappings.clear();
+        productMappings.putAll(newMappings);
+    }
+    
+    /**
+     * Custom exception for product mapping errors
+     */
+    public static class ProductMappingException extends RuntimeException {
+        public ProductMappingException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+    
+    /**
+     * Example usage showing how to create and use the mapper
+     */
+    public static void main(String[] args) {
+        // Example pre-loaded product mappings
+        Map<String, String> existingMappings = new HashMap<>();
+        existingMappings.put("B", "R1400");
+        existingMappings.put("U", "R1400");
+        existingMappings.put("S/F-3", "RTF18");
+        
+        // Create mapper with existing mappings
+        ProductMapper mapper = new ProductMapper(connection, existingMappings);
+        
+        // Create a policy object
+        Policy policy = Policy.builder()
+            .policyNumber("POL123")
+            .bmType("B")
+            .bmTypeCov("S")
+            .recno(1)
+            .packType("40")
+            .build();
+            
+        // Get product mapping
+        String productId = mapper.mapProduct(policy);
+        System.out.println("Mapped Product ID: " + productId);
     }
 }
