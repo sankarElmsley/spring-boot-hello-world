@@ -22,115 +22,166 @@ class HelloWorldApplicationTests {
 }
 
 
-public class PolicyLocationUpdateService {
+public class PolicyDeductibleUpdateService {
+    
+    private static final String HOMEOWNERS = "HOMEOWNERS";
+    private static final String HSP = "HSP";
+    private static final String SLC = "SLC";
+    private static final String HSPSLC = "HSPSLC";
     
     /**
-     * Updates policy based on location information
+     * Updates policy deductible and bmtype based on locations and previous policies
      */
-    public void updatePolicyWithLocationInfo(EdiPolicy policy, List<EdiLocation> locations, 
-                                           boolean isHomeowner, boolean isCyberProd, 
-                                           boolean isHavingLocation) {
+    public void updatePolicyDeductibleAndType(EdiPolicy currentPolicy, 
+                                            List<EdiLocation> locations,
+                                            List<EdiPolicy> previousPolicies) {
         
-        if (isHomeowner) {
-            updateHomeownerPolicy(policy, locations);
-        } else if (isCyberProd) {
-            updateCyberPolicy(policy, locations, isHavingLocation);
+        // Update policy deductible if it's 0 or null
+        updatePolicyDeductible(currentPolicy, locations);
+        
+        // Update bmtype for homeowners policies
+        if (isHomeownersRevisionOrCancellation(currentPolicy)) {
+            updateHomeownersBmType(currentPolicy, previousPolicies);
+        }
+    }
+    
+    /**
+     * Updates policy deductible with highest location deductible if current is 0 or null
+     */
+    private void updatePolicyDeductible(EdiPolicy policy, List<EdiLocation> locations) {
+        if (policy.getEdiBmDeduct() == null || policy.getEdiBmDeduct() == 0) {
+            locations.stream()
+                .filter(loc -> loc.getEdiRecNo().equals(policy.getEdiRecNo()))
+                .mapToDouble(EdiLocation::getEdiLocDeduct)
+                .max()
+                .ifPresent(policy::setEdiBmDeduct);
+        }
+    }
+    
+    /**
+     * Checks if policy is a homeowners revision or cancellation
+     */
+    private boolean isHomeownersRevisionOrCancellation(EdiPolicy policy) {
+        return HOMEOWNERS.equalsIgnoreCase(policy.getEdiBmType()) &&
+               Arrays.asList("2", "4").contains(policy.getEdiTrnCode());
+    }
+    
+    /**
+     * Updates homeowners policy bmtype based on previous policies
+     */
+    private void updateHomeownersBmType(EdiPolicy currentPolicy, List<EdiPolicy> previousPolicies) {
+        previousPolicies.stream()
+            .filter(prev -> isPreviousValidPolicy(prev, currentPolicy))
+            .findFirst()
+            .ifPresent(prevPolicy -> handlePreviousPolicy(currentPolicy, prevPolicy));
+    }
+    
+    /**
+     * Checks if a policy is a valid previous policy
+     */
+    private boolean isPreviousValidPolicy(EdiPolicy prev, EdiPolicy current) {
+        return prev.getEdiRecNo() < current.getEdiRecNo() &&
+               !"X".equals(prev.getEdiPolOk()) &&
+               prev.getEdiPolNo().equals(current.getEdiPolNo());
+    }
+    
+    /**
+     * Handles the previous policy processing logic
+     */
+    private void handlePreviousPolicy(EdiPolicy currentPolicy, EdiPolicy prevPolicy) {
+        String prevBmType = prevPolicy.getEdiBmType();
+        
+        if (prevBmType == null || prevBmType.trim().isEmpty()) {
+            handleEmptyBmType(currentPolicy, prevPolicy.getEdiRecNo());
         } else {
-            updateStandardPolicy(policy, locations);
-        }
-    }
-    
-    /**
-     * Updates homeowner policy with location information
-     */
-    private void updateHomeownerPolicy(EdiPolicy policy, List<EdiLocation> locations) {
-        // Find location with maximum value
-        EdiLocation maxValueLocation = findLocationWithMaxValue(locations);
-        
-        if (maxValueLocation != null) {
-            policy.setEdiBusCode(maxValueLocation.getEdiLocBusCode());
-            policy.setEdiBusSub(0);
-            policy.setEdiBmType(maxValueLocation.getEdiLocCov());
-        }
-    }
-    
-    /**
-     * Updates cyber product policy
-     */
-    private void updateCyberPolicy(EdiPolicy policy, List<EdiLocation> locations, 
-                                 boolean isHavingLocation) {
-        if (!isHavingLocation) {
-            // Create new location from insured info
-            EdiLocation newLocation = createLocationFromInsured(policy);
-            if (newLocation != null) {
-                locations.add(newLocation);
-            }
-            
-            // Update policy with default values
-            policy.setEdiBusCode("1");
-            policy.setEdiBusSub(0);
-            
-        } else {
-            // Find and update with max value location
-            EdiLocation maxValueLocation = findLocationWithMaxValue(locations);
-            if (maxValueLocation != null) {
-                policy.setEdiBusCode(maxValueLocation.getEdiLocBusCode());
-                policy.setEdiBusSub(0);
+            prevBmType = prevBmType.trim();
+            if (HOMEOWNERS.equalsIgnoreCase(prevBmType)) {
+                handleInvalidHomeownersBmType(currentPolicy, prevPolicy.getEdiRecNo());
+            } else if (isValidSpecialBmType(prevBmType)) {
+                updatePolicyBmType(currentPolicy, prevBmType);
+            } else {
+                handleInvalidBmType(currentPolicy, prevPolicy.getEdiRecNo());
             }
         }
     }
     
     /**
-     * Updates standard policy with location information
+     * Checks if bmtype is a valid special type (HSP, SLC, HSPSLC)
      */
-    private void updateStandardPolicy(EdiPolicy policy, List<EdiLocation> locations) {
-        EdiLocation maxValueLocation = findLocationWithMaxValue(locations);
-        
-        if (maxValueLocation != null) {
-            policy.setEdiBusCode(maxValueLocation.getEdiLocBusCode());
-            policy.setEdiBusSub(0);
-        }
+    private boolean isValidSpecialBmType(String bmType) {
+        return HSP.equals(bmType) || SLC.equals(bmType) || HSPSLC.equals(bmType);
     }
     
     /**
-     * Creates a new location from insured information
+     * Updates the policy bmtype and logs success
      */
-    private EdiLocation createLocationFromInsured(EdiPolicy policy) {
-        // Get insured information from policy
-        EdiInsured insured = policy.getEdiInsured();
-        if (insured == null) {
-            return null;
-        }
-        
-        EdiLocation location = new EdiLocation();
-        location.setEdiRecNo(policy.getEdiRecNo());
-        location.setEdiLocNo(insured.getEdiInsNo());
-        location.setEdiLocName(insured.getEdiInsName());
-        location.setEdiLocAdd(insured.getEdiInsAdd());
-        location.setEdiLocCity(insured.getEdiInsCity());
-        location.setEdiLocProv(insured.getEdiInsProv());
-        location.setEdiLocPostal(insured.getEdiInsPostal());
-        location.setEdiLocBusCode("1");
-        location.setEdiLocBusSub(0);
-        location.setEdiLocBmLoss("N");
-        
-        // Set creation/update info
-        location.setEdiCDate(policy.getEdiCDate());
-        location.setEdiUDate(policy.getEdiUDate());
-        location.setEdiCUser(policy.getEdiCUser());
-        location.setEdiUUser(policy.getEdiUUser());
-        
-        return location;
+    private void updatePolicyBmType(EdiPolicy policy, String newBmType) {
+        policy.setEdiBmType(newBmType);
+        logSuccess(policy.getEdiRecNo(), "The bmtype has been updated successfully!");
     }
     
     /**
-     * Finds location with maximum ilvalue, matching the SQL query:
-     * SELECT l.edirecno, max(edilocilvalue) maxilvalue
-     * FROM edilocation l
+     * Handles case where previous policy has empty bmtype
      */
-    private EdiLocation findLocationWithMaxValue(List<EdiLocation> locations) {
-        return locations.stream()
-            .max(Comparator.comparing(EdiLocation::getEdiLocIlValue))
-            .orElse(null);
+    private void handleEmptyBmType(EdiPolicy policy, int prevRecNo) {
+        markPolicyNotOk(policy);
+        logError(policy.getEdiRecNo(), 
+                "The bmtype for the previous edirecno " + prevRecNo + " was empty!");
+    }
+    
+    /**
+     * Handles case where previous policy has invalid homeowners bmtype
+     */
+    private void handleInvalidHomeownersBmType(EdiPolicy policy, int prevRecNo) {
+        markPolicyNotOk(policy);
+        logError(policy.getEdiRecNo(), 
+                "The bmtype for the previous edirecno " + prevRecNo + " was not properly set!");
+    }
+    
+    /**
+     * Handles case where previous policy has invalid bmtype
+     */
+    private void handleInvalidBmType(EdiPolicy policy, int prevRecNo) {
+        markPolicyNotOk(policy);
+        logError(policy.getEdiRecNo(), 
+                "The bmtype for the previous edirecno " + prevRecNo + " was wrong!");
+    }
+    
+    /**
+     * Marks policy as not ok
+     */
+    private void markPolicyNotOk(EdiPolicy policy) {
+        policy.setEdiPolOk("N");
+    }
+    
+    /**
+     * Logs error message
+     */
+    private void logError(int recNo, String message) {
+        // Replace with your actual logging mechanism
+        System.err.println("Error for recNo " + recNo + ": " + message);
+    }
+    
+    /**
+     * Logs success message
+     */
+    private void logSuccess(int recNo, String message) {
+        // Replace with your actual logging mechanism
+        System.out.println("Success for recNo " + recNo + ": " + message);
+    }
+    
+    /**
+     * Example usage method
+     */
+    public void exampleUsage() {
+        PolicyDeductibleUpdateService service = new PolicyDeductibleUpdateService();
+        
+        // Example data
+        EdiPolicy currentPolicy = new EdiPolicy();
+        List<EdiLocation> locations = new ArrayList<>();
+        List<EdiPolicy> previousPolicies = new ArrayList<>();
+        
+        // Update policy
+        service.updatePolicyDeductibleAndType(currentPolicy, locations, previousPolicies);
     }
 }
