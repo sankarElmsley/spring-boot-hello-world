@@ -28,24 +28,24 @@ public class PolicyLocationUpdateService {
      * Updates policy based on location information
      */
     public void updatePolicyWithLocationInfo(EdiPolicy policy, List<EdiLocation> locations, 
-                                           List<EdiBusCode> busCodes, boolean isHomeowner, 
-                                           boolean isCyberProd, boolean isHavingLocation) {
+                                           boolean isHomeowner, boolean isCyberProd, 
+                                           boolean isHavingLocation) {
         
         if (isHomeowner) {
-            updateHomeownerPolicy(policy, locations, busCodes);
+            updateHomeownerPolicy(policy, locations);
         } else if (isCyberProd) {
-            updateCyberPolicy(policy, locations, busCodes, isHavingLocation);
+            updateCyberPolicy(policy, locations, isHavingLocation);
         } else {
-            updateStandardPolicy(policy, locations, busCodes);
+            updateStandardPolicy(policy, locations);
         }
     }
     
     /**
      * Updates homeowner policy with location information
      */
-    private void updateHomeownerPolicy(EdiPolicy policy, List<EdiLocation> locations, List<EdiBusCode> busCodes) {
+    private void updateHomeownerPolicy(EdiPolicy policy, List<EdiLocation> locations) {
         // Find location with maximum value
-        EdiLocation maxValueLocation = findLocationWithMaxValue(locations, busCodes, policy.getEdiCompNo());
+        EdiLocation maxValueLocation = findLocationWithMaxValue(locations);
         
         if (maxValueLocation != null) {
             policy.setEdiBusCode(maxValueLocation.getEdiLocBusCode());
@@ -58,7 +58,7 @@ public class PolicyLocationUpdateService {
      * Updates cyber product policy
      */
     private void updateCyberPolicy(EdiPolicy policy, List<EdiLocation> locations, 
-                                 List<EdiBusCode> busCodes, boolean isHavingLocation) {
+                                 boolean isHavingLocation) {
         if (!isHavingLocation) {
             // Create new location from insured info
             EdiLocation newLocation = createLocationFromInsured(policy);
@@ -72,7 +72,7 @@ public class PolicyLocationUpdateService {
             
         } else {
             // Find and update with max value location
-            EdiLocation maxValueLocation = findLocationWithMaxValue(locations, busCodes, policy.getEdiCompNo());
+            EdiLocation maxValueLocation = findLocationWithMaxValue(locations);
             if (maxValueLocation != null) {
                 policy.setEdiBusCode(maxValueLocation.getEdiLocBusCode());
                 policy.setEdiBusSub(0);
@@ -83,8 +83,8 @@ public class PolicyLocationUpdateService {
     /**
      * Updates standard policy with location information
      */
-    private void updateStandardPolicy(EdiPolicy policy, List<EdiLocation> locations, List<EdiBusCode> busCodes) {
-        EdiLocation maxValueLocation = findLocationWithMaxValue(locations, busCodes, policy.getEdiCompNo());
+    private void updateStandardPolicy(EdiPolicy policy, List<EdiLocation> locations) {
+        EdiLocation maxValueLocation = findLocationWithMaxValue(locations);
         
         if (maxValueLocation != null) {
             policy.setEdiBusCode(maxValueLocation.getEdiLocBusCode());
@@ -124,50 +124,13 @@ public class PolicyLocationUpdateService {
     }
     
     /**
-     * Finds location with maximum value that matches business code criteria
+     * Finds location with maximum ilvalue, matching the SQL query:
+     * SELECT l.edirecno, max(edilocilvalue) maxilvalue
+     * FROM edilocation l
      */
-    private EdiLocation findLocationWithMaxValue(List<EdiLocation> locations, 
-                                               List<EdiBusCode> busCodes, 
-                                               String companyNo) {
+    private EdiLocation findLocationWithMaxValue(List<EdiLocation> locations) {
         return locations.stream()
-            .filter(loc -> isValidBusinessCode(loc, busCodes, companyNo))
-            .max(Comparator.comparing(loc -> 
-                loc.getEdiLocIlValue() != null ? 
-                loc.getEdiLocIlValue() : 
-                (loc.getEdiLocBValue() + loc.getEdiLocCValue())))
+            .max(Comparator.comparing(EdiLocation::getEdiLocIlValue))
             .orElse(null);
-    }
-    
-    /**
-     * Validates business code for location
-     */
-    private boolean isValidBusinessCode(EdiLocation location, List<EdiBusCode> busCodes, String companyNo) {
-        return busCodes.stream()
-            .anyMatch(code -> 
-                code.getEdiBusCode().equals(location.getEdiLocBusCode()) &&
-                code.getEdiBusSub().equals(location.getEdiLocBusSub()) &&
-                code.getEdiCompany().equals(companyNo));
-    }
-    
-    /**
-     * Example usage method showing how to use this service
-     */
-    public void exampleUsage() {
-        PolicyLocationUpdateService service = new PolicyLocationUpdateService();
-        
-        // Example data setup
-        EdiPolicy policy = new EdiPolicy();
-        List<EdiLocation> locations = new ArrayList<>();
-        List<EdiBusCode> busCodes = new ArrayList<>();
-        
-        // Update policy based on type
-        service.updatePolicyWithLocationInfo(
-            policy,
-            locations,
-            busCodes,
-            false,  // isHomeowner
-            true,   // isCyberProd
-            false   // isHavingLocation
-        );
     }
 }
