@@ -23,86 +23,76 @@ class HelloWorldApplicationTests {
 
 
 
-import java.util.List;
-import java.util.Optional;
-import java.util.Comparator;
+public class PolicyUpdateService {
+    private static final String HSP = "HSP";
+    private static final String SLC = "SLC";
+    private static final String HSPSLC = "HSP/SLC";
+    private static final String HOMEOWNERS = "HOMEOWNERS";
 
-@Service
-public class DeductibleUpdateService {
-    
-    private final EdiPolicyRepository policyRepository;
-    private final EdiLocationRepository locationRepository;
+    public void updatePolicyDeductibleAndType(Policy policy, List<Location> locations, 
+                                            List<Policy> allPolicies) {
+        // Update deductible if it's zero or null
+        if (policy.getDeductible() == null || policy.getDeductible() == 0) {
+            locations.stream()
+                .map(Location::getDeductible)
+                .filter(Objects::nonNull)
+                .max(Double::compare)
+                .ifPresent(policy::setDeductible);
+        }
 
-    @Autowired
-    public DeductibleUpdateService(EdiPolicyRepository policyRepository, 
-                                 EdiLocationRepository locationRepository) {
-        this.policyRepository = policyRepository;
-        this.locationRepository = locationRepository;
-    }
-
-    @Transactional
-    public void updatePolicyDeductibleFromHighestLocation(String recNo) {
-        // Find policies with zero or null deductible
-        Optional<EdiPolicy> policyOpt = policyRepository.findByRecNoAndDeductibleZeroOrNull(recNo);
-        
-        if (policyOpt.isPresent()) {
-            // Get all locations for this policy
-            List<EdiLocation> locations = locationRepository.findByRecNo(recNo);
-            
-            // Find highest deductible using Java 8 streams
-            Optional<Double> highestDeductible = locations.stream()
-                .map(EdiLocation::getDeductible)
-                .filter(deductible -> deductible != null)
-                .max(Comparator.naturalOrder());
-                
-            // Update policy if highest deductible found
-            highestDeductible.ifPresent(deductible -> {
-                EdiPolicy policy = policyOpt.get();
-                policy.setDeductible(deductible);
-                policyRepository.save(policy);
-            });
+        // Handle BMType updates for homeowner policies
+        if (isHomeownerPolicyWithRevisionOrCancellation(policy)) {
+            handleHomeownersPolicy(policy, allPolicies);
         }
     }
-}
 
-@Repository
-public interface EdiPolicyRepository extends JpaRepository<EdiPolicy, Long> {
-    @Query("SELECT p FROM EdiPolicy p WHERE p.recNo = :recNo " +
-           "AND (p.deductible = 0 OR p.deductible IS NULL)")
-    Optional<EdiPolicy> findByRecNoAndDeductibleZeroOrNull(@Param("recNo") String recNo);
-}
+    private boolean isHomeownerPolicyWithRevisionOrCancellation(Policy policy) {
+        return HOMEOWNERS.equalsIgnoreCase(policy.getBmtype()) && 
+               Arrays.asList("2", "4").contains(policy.getTrnCode());
+    }
 
-@Repository
-public interface EdiLocationRepository extends JpaRepository<EdiLocation, Long> {
-    List<EdiLocation> findByRecNo(String recNo);
-}
+    private void handleHomeownersPolicy(Policy currentPolicy, List<Policy> allPolicies) {
+        allPolicies.stream()
+            .filter(p -> p.getEdipolno().equals(currentPolicy.getEdipolno()))
+            .filter(p -> Integer.parseInt(p.getRecNo()) < Integer.parseInt(currentPolicy.getRecNo()))
+            .filter(p -> !"X".equals(p.getStatus()))
+            .max(Comparator.comparing(p -> Integer.parseInt(p.getRecNo())))
+            .ifPresent(previousPolicy -> updateBasedOnPreviousPolicy(currentPolicy, previousPolicy));
+    }
 
-@Entity
-@Table(name = "edipolicy")
-public class EdiPolicy {
-    @Id
-    private Long id;
-    
-    @Column(name = "edirecno")
-    private String recNo;
-    
-    @Column(name = "edibmdeduct")
-    private Double deductible;
-    
-    // Getters and setters
-}
+    private void updateBasedOnPreviousPolicy(Policy currentPolicy, Policy previousPolicy) {
+        String previousBmtype = previousPolicy.getBmtype();
+        
+        if (StringUtils.isBlank(previousBmtype)) {
+            currentPolicy.setStatus("N");
+            logError(currentPolicy.getRecNo(), "The bmtype for the previous edirecno was empty!");
+            return;
+        }
 
-@Entity
-@Table(name = "edilocation")
-public class EdiLocation {
-    @Id
-    private Long id;
-    
-    @Column(name = "edirecno")
-    private String recNo;
-    
-    @Column(name = "edilocdeduct")
-    private Double deductible;
-    
-    // Getters and setters
+        previousBmtype = previousBmtype.trim();
+        if (HOMEOWNERS.equalsIgnoreCase(previousBmtype)) {
+            currentPolicy.setStatus("N");
+            logError(currentPolicy.getRecNo(), 
+                "The bmtype for the previous edirecno was not properly set!");
+        } else if (isValidBmType(previousBmtype)) {
+            currentPolicy.setBmtype(previousBmtype);
+            logInfo(currentPolicy.getRecNo(), "BMType updated successfully");
+        } else {
+            currentPolicy.setStatus("N");
+            logError(currentPolicy.getRecNo(), 
+                "The bmtype for the previous edirecno was wrong!");
+        }
+    }
+
+    private boolean isValidBmType(String bmtype) {
+        return HSP.equals(bmtype) || SLC.equals(bmtype) || HSPSLC.equals(bmtype);
+    }
+
+    private void logError(String recNo, String message) {
+        // Implementation of error logging
+    }
+
+    private void logInfo(String recNo, String message) {
+        // Implementation of info logging
+    }
 }
