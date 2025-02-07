@@ -23,76 +23,67 @@ class HelloWorldApplicationTests {
 
 
 
-public class PolicyUpdateService {
-    private static final String HSP = "HSP";
-    private static final String SLC = "SLC";
-    private static final String HSPSLC = "HSP/SLC";
-    private static final String HOMEOWNERS = "HOMEOWNERS";
+Go to the Canada Post Developer Program:
 
-    public void updatePolicyDeductibleAndType(Policy policy, List<Location> locations, 
-                                            List<Policy> allPolicies) {
-        // Update deductible if it's zero or null
-        if (policy.getDeductible() == null || policy.getDeductible() == 0) {
-            locations.stream()
-                .map(Location::getDeductible)
-                .filter(Objects::nonNull)
-                .max(Double::compare)
-                .ifPresent(policy::setDeductible);
-        }
+Visit https://www.canadapost-postescanada.ca/ac/support/api/
+Click on "Get Started" or "Register Now"
 
-        // Handle BMType updates for homeowner policies
-        if (isHomeownerPolicyWithRevisionOrCancellation(policy)) {
-            handleHomeownersPolicy(policy, allPolicies);
-        }
-    }
 
-    private boolean isHomeownerPolicyWithRevisionOrCancellation(Policy policy) {
-        return HOMEOWNERS.equalsIgnoreCase(policy.getBmtype()) && 
-               Arrays.asList("2", "4").contains(policy.getTrnCode());
-    }
+Choose your service plan:
 
-    private void handleHomeownersPolicy(Policy currentPolicy, List<Policy> allPolicies) {
-        allPolicies.stream()
-            .filter(p -> p.getEdipolno().equals(currentPolicy.getEdipolno()))
-            .filter(p -> Integer.parseInt(p.getRecNo()) < Integer.parseInt(currentPolicy.getRecNo()))
-            .filter(p -> !"X".equals(p.getStatus()))
-            .max(Comparator.comparing(p -> Integer.parseInt(p.getRecNo())))
-            .ifPresent(previousPolicy -> updateBasedOnPreviousPolicy(currentPolicy, previousPolicy));
-    }
+They offer different tiers based on usage:
 
-    private void updateBasedOnPreviousPolicy(Policy currentPolicy, Policy previousPolicy) {
-        String previousBmtype = previousPolicy.getBmtype();
-        
-        if (StringUtils.isBlank(previousBmtype)) {
-            currentPolicy.setStatus("N");
-            logError(currentPolicy.getRecNo(), "The bmtype for the previous edirecno was empty!");
-            return;
-        }
+Pay As You Go
+Standard
+Professional
+Enterprise
 
-        previousBmtype = previousBmtype.trim();
-        if (HOMEOWNERS.equalsIgnoreCase(previousBmtype)) {
-            currentPolicy.setStatus("N");
-            logError(currentPolicy.getRecNo(), 
-                "The bmtype for the previous edirecno was not properly set!");
-        } else if (isValidBmType(previousBmtype)) {
-            currentPolicy.setBmtype(previousBmtype);
-            logInfo(currentPolicy.getRecNo(), "BMType updated successfully");
-        } else {
-            currentPolicy.setStatus("N");
-            logError(currentPolicy.getRecNo(), 
-                "The bmtype for the previous edirecno was wrong!");
-        }
-    }
 
-    private boolean isValidBmType(String bmtype) {
-        return HSP.equals(bmtype) || SLC.equals(bmtype) || HSPSLC.equals(bmtype);
-    }
+Each plan has different pricing and transaction limits
+You can start with Pay As You Go for testing
 
-    private void logError(String recNo, String message) {
-        // Implementation of error logging
-    }
 
-    private void logInfo(String recNo, String message) {
-        // Implementation of info logging
-    }
-}
+Create a business account:
+
+Fill out the registration form
+You'll need:
+
+Business name
+Business address
+Contact information
+Business registration number/GST number
+
+
+Valid Canadian business registration is required
+
+
+Complete verification:
+
+Canada Post will verify your business information
+May require additional documentation
+This process can take 1-3 business days
+
+
+Access the developer portal:
+
+Once approved, you'll get access to the developer portal
+Log in to https://www.canadapost-postescanada.ca/ac/
+Navigate to "My Account" > "Web Service Credentials"
+Your API key will be listed there
+
+
+Test your API key:
+
+You'll get a test environment first
+Can make limited API calls to test integration
+Once testing is successful, you can move to production
+
+
+
+Important notes:
+
+Pricing is based on number of lookups/transactions
+You'll need a valid credit card for billing
+Free trial may be available for initial testing
+Support is available via phone and email during business hours
+They provide API documentation and sample code once registered
