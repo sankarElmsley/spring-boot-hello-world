@@ -23,67 +23,214 @@ class HelloWorldApplicationTests {
 
 
 
-Go to the Canada Post Developer Program:
+import org.apache.http.client.HttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.StringEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.http.util.EntityUtils;
+import java.util.concurrent.TimeUnit;
+import java.util.Map;
+import java.util.HashMap;
 
-Visit https://www.canadapost-postescanada.ca/ac/support/api/
-Click on "Get Started" or "Register Now"
+public class CanadaPostAddressValidator {
+    private static final Logger logger = LoggerFactory.getLogger(CanadaPostAddressValidator.class);
+    private static final String API_BASE_URL = "https://ws1.postescanada-canadapost.ca/AddressComplete/Interactive/";
+    private final String apiKey;
+    private final HttpClient httpClient;
+    private final ObjectMapper objectMapper;
+    private final int maxRetries;
+    private final long retryDelayMs;
 
+    public CanadaPostAddressValidator(String apiKey) {
+        this(apiKey, 3, 1000); // Default: 3 retries with 1 second delay
+    }
 
-Choose your service plan:
+    public CanadaPostAddressValidator(String apiKey, int maxRetries, long retryDelayMs) {
+        this.apiKey = apiKey;
+        this.maxRetries = maxRetries;
+        this.retryDelayMs = retryDelayMs;
+        this.httpClient = HttpClients.custom()
+            .setConnectionTimeoutMillis(5000)
+            .setResponseTimeout(10, TimeUnit.SECONDS)
+            .build();
+        this.objectMapper = new ObjectMapper();
+    }
 
-They offer different tiers based on usage:
+    public AddressValidationResult validateAddress(CanadianAddress address) {
+        try {
+            // Step 1: Find matching addresses
+            String searchText = buildSearchText(address);
+            Map<String, String> findParams = new HashMap<>();
+            findParams.put("Key", apiKey);
+            findParams.put("SearchTerm", searchText);
+            findParams.put("Country", "CAN");
+            findParams.put("LanguagePreference", "EN");
 
-Pay As You Go
-Standard
-Professional
-Enterprise
+            JsonNode findResult = executeRequest("Find/v2.10/json3.ws", findParams);
+            
+            if (!isSuccessful(findResult)) {
+                return AddressValidationResult.error("Find request failed: " + getErrorMessage(findResult));
+            }
 
+            // Step 2: Retrieve full address details
+            String moniker = findResult.path("Items").path(0).path("Id").asText();
+            
+            Map<String, String> retrieveParams = new HashMap<>();
+            retrieveParams.put("Key", apiKey);
+            retrieveParams.put("Id", moniker);
 
-Each plan has different pricing and transaction limits
-You can start with Pay As You Go for testing
+            JsonNode retrieveResult = executeRequest("Retrieve/v2.10/json3.ws", retrieveParams);
 
+            if (!isSuccessful(retrieveResult)) {
+                return AddressValidationResult.error("Retrieve request failed: " + getErrorMessage(retrieveResult));
+            }
 
-Create a business account:
+            return parseValidationResult(retrieveResult);
 
-Fill out the registration form
-You'll need:
+        } catch (Exception e) {
+            logger.error("Error validating address", e);
+            return AddressValidationResult.error("Validation failed: " + e.getMessage());
+        }
+    }
 
-Business name
-Business address
-Contact information
-Business registration number/GST number
+    private JsonNode executeRequest(String endpoint, Map<String, String> params) throws Exception {
+        int attempts = 0;
+        Exception lastException = null;
 
+        while (attempts < maxRetries) {
+            try {
+                HttpPost request = new HttpPost(API_BASE_URL + endpoint);
+                request.setEntity(new StringEntity(objectMapper.writeValueAsString(params)));
+                request.setHeader("Content-Type", "application/json");
 
-Valid Canadian business registration is required
+                String response = EntityUtils.toString(httpClient.execute(request).getEntity());
+                return objectMapper.readTree(response);
 
+            } catch (Exception e) {
+                lastException = e;
+                attempts++;
+                
+                if (attempts < maxRetries) {
+                    Thread.sleep(retryDelayMs);
+                }
+            }
+        }
 
-Complete verification:
+        throw new RuntimeException("Failed after " + maxRetries + " attempts", lastException);
+    }
 
-Canada Post will verify your business information
-May require additional documentation
-This process can take 1-3 business days
+    private String buildSearchText(CanadianAddress address) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(address.getStreetNumber()).append(" ")
+          .append(address.getStreetName()).append(", ")
+          .append(address.getCity()).append(", ")
+          .append(address.getProvince());
+        
+        if (address.getPostalCode() != null) {
+            sb.append(" ").append(address.getPostalCode());
+        }
+        
+        return sb.toString();
+    }
 
+    private boolean isSuccessful(JsonNode response) {
+        return !response.path("Items").isEmpty();
+    }
 
-Access the developer portal:
+    private String getErrorMessage(JsonNode response) {
+        return response.path("Error").asText("Unknown error");
+    }
 
-Once approved, you'll get access to the developer portal
-Log in to https://www.canadapost-postescanada.ca/ac/
-Navigate to "My Account" > "Web Service Credentials"
-Your API key will be listed there
+    private AddressValidationResult parseValidationResult(JsonNode retrieveResult) {
+        JsonNode item = retrieveResult.path("Items").path(0);
+        
+        if (item.isMissingNode()) {
+            return AddressValidationResult.error("No address found");
+        }
 
+        StandardizedAddress standardized = new StandardizedAddress();
+        standardized.setStreetNumber(item.path("BuildingNumber").asText());
+        standardized.setStreetName(item.path("Street").asText());
+        standardized.setCity(item.path("City").asText());
+        standardized.setProvince(item.path("ProvinceCode").asText());
+        standardized.setPostalCode(item.path("PostalCode").asText());
+        
+        return AddressValidationResult.success(standardized);
+    }
 
-Test your API key:
+    // Inner classes for address representation
+    public static class CanadianAddress {
+        private String streetNumber;
+        private String streetName;
+        private String city;
+        private String province;
+        private String postalCode;
 
-You'll get a test environment first
-Can make limited API calls to test integration
-Once testing is successful, you can move to production
+        // Getters and setters
+        public String getStreetNumber() { return streetNumber; }
+        public void setStreetNumber(String streetNumber) { this.streetNumber = streetNumber; }
+        public String getStreetName() { return streetName; }
+        public void setStreetName(String streetName) { this.streetName = streetName; }
+        public String getCity() { return city; }
+        public void setCity(String city) { this.city = city; }
+        public String getProvince() { return province; }
+        public void setProvince(String province) { this.province = province; }
+        public String getPostalCode() { return postalCode; }
+        public void setPostalCode(String postalCode) { this.postalCode = postalCode; }
+    }
 
+    public static class StandardizedAddress extends CanadianAddress {
+        private boolean verified;
+        
+        public boolean isVerified() { return verified; }
+        public void setVerified(boolean verified) { this.verified = verified; }
+    }
 
+    public static class AddressValidationResult {
+        private final boolean success;
+        private final StandardizedAddress standardizedAddress;
+        private final String error;
 
-Important notes:
+        private AddressValidationResult(boolean success, StandardizedAddress address, String error) {
+            this.success = success;
+            this.standardizedAddress = address;
+            this.error = error;
+        }
 
-Pricing is based on number of lookups/transactions
-You'll need a valid credit card for billing
-Free trial may be available for initial testing
-Support is available via phone and email during business hours
-They provide API documentation and sample code once registered
+        public static AddressValidationResult success(StandardizedAddress address) {
+            return new AddressValidationResult(true, address, null);
+        }
+
+        public static AddressValidationResult error(String error) {
+            return new AddressValidationResult(false, null, error);
+        }
+
+        public boolean isSuccess() { return success; }
+        public StandardizedAddress getStandardizedAddress() { return standardizedAddress; }
+        public String getError() { return error; }
+    }
+
+    // Example usage
+    public static void main(String[] args) {
+        CanadaPostAddressValidator validator = new CanadaPostAddressValidator("YOUR_API_KEY");
+        
+        CanadianAddress address = new CanadianAddress();
+        address.setStreetNumber("123");
+        address.setStreetName("Main Street");
+        address.setCity("Toronto");
+        address.setProvince("ON");
+        address.setPostalCode("M5V 2T6");
+
+        AddressValidationResult result = validator.validateAddress(address);
+        
+        if (result.isSuccess()) {
+            StandardizedAddress standardized = result.getStandardizedAddress();
+            System.out.println("Validated Postal Code: " + standardized.getPostalCode());
+        } else {
+            System.out.println("Error: " + result.getError());
+        }
+    }
+}
