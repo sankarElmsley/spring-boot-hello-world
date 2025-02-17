@@ -117,3 +117,53 @@ public class PolicyBmTypeMapper {
         });
     }
 }
+
+
+
+
+
+@Service
+@Slf4j
+public class LocationValueFinder {
+    
+    public void updatePolicyWithLocationCode(EDIPolicy policy, List<EDILocation> locations) {
+        if (CollectionUtils.isEmpty(locations)) {
+            log.warn("No locations provided for policy {}", policy.getEDIRECNO());
+            return;
+        }
+
+        EDILocation locationToUse;
+        if (locations.size() == 1) {
+            locationToUse = locations.get(0);
+        } else {
+            // This part maps to the subquery that finds max value:
+            // SELECT max(CASE WHEN edilocilvalue IS NULL THEN (edilocbvalue + ediloccvalue) ELSE edilocilvalue END)
+            locationToUse = locations.stream()
+                .max((loc1, loc2) -> {
+                    double value1 = calculateLocationValue(loc1);  // Maps to the CASE statement
+                    double value2 = calculateLocationValue(loc2);
+                    return Double.compare(value1, value2);
+                })
+                .orElse(null);
+        }
+
+        // This maps to the final SELECT of business code fields
+        if (locationToUse != null) {
+            policy.setEDIBUSCODE(locationToUse.getEDILOCBUSCODE());
+            policy.setEDIBUSSUB(0);
+        }
+    }
+
+    // This method maps to the CASE statement in both the subquery and main query:
+    // CASE WHEN edilocilvalue IS NULL THEN (edilocbvalue + ediloccvalue) ELSE edilocilvalue END
+    private double calculateLocationValue(EDILocation location) {
+        if (location.getEDILOCILVALUE() != null) {            // WHEN edilocilvalue IS NULL
+            return location.getEDILOCILVALUE();               // ELSE edilocilvalue
+        }
+        
+        double buildingValue = location.getEDILOCBVALUE() != null ? location.getEDILOCBVALUE() : 0.0;
+        double contentsValue = location.getEDILOCCVALUE() != null ? location.getEDILOCCVALUE() : 0.0;
+        
+        return buildingValue + contentsValue;                  // THEN (edilocbvalue + ediloccvalue)
+    }
+}
