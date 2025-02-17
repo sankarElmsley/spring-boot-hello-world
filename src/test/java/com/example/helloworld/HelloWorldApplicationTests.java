@@ -167,3 +167,64 @@ public class LocationValueFinder {
         return buildingValue + contentsValue;                  // THEN (edilocbvalue + ediloccvalue)
     }
 }
+
+
+
+--------------------------------------------------------------------
+
+    @Service
+@Slf4j
+public class LocationValueFinder {
+    
+    public void updatePolicyAndLocationsWithBusinessCode(EDIPolicy policy, List<EDILocation> locations) {
+        if (CollectionUtils.isEmpty(locations)) {
+            log.warn("No locations provided for policy {}", policy.getEDIRECNO());
+            return;
+        }
+
+        // Find location with max value
+        EDILocation locationWithMaxValue = locations.size() == 1 ? 
+            locations.get(0) : 
+            locations.stream()
+                .max((loc1, loc2) -> Double.compare(
+                    calculateLocationValue(loc1), 
+                    calculateLocationValue(loc2)))
+                .orElse(null);
+
+        if (locationWithMaxValue != null) {
+            String businessCode = locationWithMaxValue.getEDILOCBUSCODE();
+            
+            // Update policy with business code from max value location
+            policy.setEDIBUSCODE(businessCode);
+            policy.setEDIBUSSUB(0);
+            
+            // Update all locations that have missing/invalid business code
+            locations.stream()
+                .filter(location -> StringUtils.isEmpty(location.getEDILOCBUSCODE()))
+                .forEach(location -> {
+                    location.setEDILOCBUSCODE(businessCode);
+                    location.setEDILOCBUSSUB(0);
+                    log.info("Updated location {} with business code {} from max value location {}", 
+                        location.getEDILOCNO(),
+                        businessCode,
+                        locationWithMaxValue.getEDILOCNO());
+                });
+
+            log.info("Updated policy {} and its locations with business code {} from location {}", 
+                policy.getEDIRECNO(), 
+                businessCode,
+                locationWithMaxValue.getEDILOCNO());
+        }
+    }
+
+    private double calculateLocationValue(EDILocation location) {
+        if (location.getEDILOCILVALUE() != null) {
+            return location.getEDILOCILVALUE();
+        }
+        
+        double buildingValue = location.getEDILOCBVALUE() != null ? location.getEDILOCBVALUE() : 0.0;
+        double contentsValue = location.getEDILOCCVALUE() != null ? location.getEDILOCCVALUE() : 0.0;
+        
+        return buildingValue + contentsValue;
+    }
+}
