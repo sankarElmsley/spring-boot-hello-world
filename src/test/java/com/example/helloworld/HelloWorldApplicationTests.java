@@ -22,157 +22,97 @@ class HelloWorldApplicationTests {
 }
 
 
-
 @Service
 @Slf4j
-public class ProductMapper {
+public class PolicyBmTypeMapper {
 
     @Autowired 
     private JdbcTemplate jdbcTemplate;
-
-    private Map<String, String> bmTypeProductMap;
-
-    @PostConstruct
-    public void initializeBmTypeMap() {
-        loadBmTypeProductMap();
-    }
-
-    private void loadBmTypeProductMap() {
-        String sql = "select edibmtype, prdtp from ediproduct where edicompno in (17,44)";
-        
-        try {
-            List<Map<String, Object>> results = jdbcTemplate.queryForList(sql);
-            bmTypeProductMap = results.stream()
-                .collect(Collectors.toMap(
-                    row -> ((String) row.get("edibmtype")).trim(),
-                    row -> ((String) row.get("prdtp")).trim(),
-                    (existing, replacement) -> existing
-                ));
-            
-            log.info("Loaded {} BM type mappings", bmTypeProductMap.size());
-        } catch (Exception e) {
-            log.error("Error loading BM type product mappings", e);
-            throw new ProductMappingException("Failed to load BM type mappings", e);
-        }
-    }
-
-    public void mapProducts(List<Policy> policies) {
-        policies.forEach(policy -> {
-            String bmType = policy.getPolicyData().getEdibmtype();
-            if (bmType != null) {
-                String productId = bmTypeProductMap.get(bmType.trim());
-                if (StringUtils.isEmpty(productId)) {
-                    policy.setStatus(DataConstants.TRANSACTION_STATUS_ERROR);
-                    policy.addError("Missing/Incorrect BM Type");
-                    log.warn("No product mapping found for BM type: {}", bmType);
-                }
-                policy.setProductId(productId);
-            } else {
-                policy.setStatus(DataConstants.TRANSACTION_STATUS_ERROR);
-                policy.addError("Missing BM Type");
-                log.warn("Null BM type for policy: {}", policy.getPolNo());
-            }
-        });
-    }
-
-    // Method to refresh the mapping if needed
-    public void refreshBmTypeMap() {
-        loadBmTypeProductMap();
-    }
-}
-
-
-
-
-@Service
-@Slf4j
-public class ProductMapper {
-
-    @Autowired 
-    private JdbcTemplate jdbcTemplate;
-
-    private Map<String, String> bmTypeProductMap;
 
     /**
-     * Gets BM type to product mappings for given company numbers
-     * @param companyNumbers List of company numbers
-     * @return Map of BM type to product ID mappings
+     * Gets previous policy BM types for policies with specific transaction codes
+     * @param policies List of policies to process
+     * @return Map of policy number to BM type info
      */
-    public Map<String, String> getBmTypeProductMap(List<Integer> companyNumbers) {
-        if (CollectionUtils.isEmpty(companyNumbers)) {
-            log.warn("No company numbers provided for BM type mapping");
+    public Map<String, String> getPreviousBmTypes(List<Policy> policies) {
+        List<String> filteredPolNos = policies.stream()
+            .filter(policy -> Arrays.asList("2", "4").contains(policy.getPolicyData().getEditrncode()))
+            .map(Policy::getPolNo)
+            .collect(Collectors.toList());
+
+        if (CollectionUtils.isEmpty(filteredPolNos)) {
+            log.info("No policies found with transaction codes 2 or 4");
             return Collections.emptyMap();
         }
 
-        String params = StringUtils.repeat(",?", companyNumbers.size()).substring(1);
-        String sql = "select edibmtype, prdtp from ediproduct where edicompno in (" + params + ")";
+        Map<String, String> bmTypeByPolNo = new HashMap<>();
+        List<Map<String, Object>> bmTypeList = new ArrayList<>();
+        
+        // Process in batches of 500
+        ListUtils.partition(filteredPolNos, 500).forEach(polNoList -> 
+            findPreviousBmTypesForBatch(polNoList, bmTypeList));
 
-        try {
-            List<Map<String, Object>> results = jdbcTemplate.queryForList(
-                sql,
-                companyNumbers.toArray(),
-                generateParamTypes(companyNumbers.size())
-            );
-
-            Map<String, String> bmTypeMap = results.stream()
+        if (CollectionUtils.isNotEmpty(bmTypeList)) {
+            bmTypeByPolNo = bmTypeList.stream()
                 .collect(Collectors.toMap(
+                    row -> ((String) row.get("edipolno")).trim(),
                     row -> ((String) row.get("edibmtype")).trim(),
-                    row -> ((String) row.get("prdtp")).trim(),
                     (existing, replacement) -> existing
                 ));
-            
-            log.info("Loaded {} BM type mappings for companies: {}", 
-                bmTypeMap.size(), companyNumbers);
-            
-            return bmTypeMap;
-
-        } catch (Exception e) {
-            log.error("Error loading BM type product mappings for companies: {}", 
-                companyNumbers, e);
-            throw new ProductMappingException(
-                "Failed to load BM type mappings for companies: " + companyNumbers, e);
         }
+
+        return bmTypeByPolNo;
     }
 
-    private int[] generateParamTypes(int size) {
-        int[] paramTypes = new int[size];
-        Arrays.fill(paramTypes, Types.INTEGER);
-        return paramTypes;
+    private void findPreviousBmTypesForBatch(List<String> polNos, List<Map<String, Object>> bmTypeList) {
+        String params = StringUtils.repeat(",?", polNos.size()).substring(1);
+        String sqlQuery = 
+            "SELECT distinct TRIM(edipolno) as edipolno, TRIM(edibmtype) as edibmtype " +
+            "FROM edipolicy WHERE edirecno in (" +
+            "SELECT MAX(edirecno) FROM edipolicy ep GROUP BY edipolno, edipololdno " +
+            "HAVING (ep.edipolno in (" + params + ") OR ep.edipololdno in (" + params + ")))";
+
+        try {
+            Object[] paramVals = ArrayUtils.addAll(polNos.toArray(), polNos.toArray());
+            int[] paramTypes = new int[polNos.size() * 2];
+            Arrays.fill(paramTypes, Types.VARCHAR);
+
+            List<Map<String, Object>> results = jdbcTemplate.queryForList(sqlQuery, paramVals, paramTypes);
+            if (CollectionUtils.isNotEmpty(results)) {
+                bmTypeList.addAll(results);
+            }
+        } catch (Exception e) {
+            log.error("Error finding previous BM types for policies: {}", polNos, e);
+            throw new BmTypeMappingException("Failed to find previous BM types", e);
+        }
     }
 
     /**
-     * Maps products for a list of policies using provided company numbers
-     * @param policies List of policies to process
-     * @param companyNumbers List of company numbers to get mappings for
+     * Apply previous BM type mappings to policies
      */
-    public void mapProducts(List<Policy> policies, List<Integer> companyNumbers) {
-        // Get fresh mapping for requested companies
-        Map<String, String> bmTypeMap = getBmTypeProductMap(companyNumbers);
+    public void applyPreviousBmTypes(List<Policy> policies) {
+        Map<String, String> bmTypeMap = getPreviousBmTypes(policies);
         
-        if (bmTypeMap.isEmpty()) {
-            log.error("No BM type mappings found for companies: {}", companyNumbers);
-            policies.forEach(policy -> {
-                policy.setStatus(DataConstants.TRANSACTION_STATUS_ERROR);
-                policy.addError("No BM type mappings available");
-            });
-            return;
-        }
-
         policies.forEach(policy -> {
-            String bmType = policy.getPolicyData().getEdibmtype();
-            if (bmType != null) {
-                String productId = bmTypeMap.get(bmType.trim());
-                if (StringUtils.isEmpty(productId)) {
+            if (Arrays.asList("2", "4").contains(policy.getPolicyData().getEditrncode())) {
+                String prevBmType = bmTypeMap.get(policy.getPolNo());
+                
+                if (StringUtils.isEmpty(prevBmType)) {
                     policy.setStatus(DataConstants.TRANSACTION_STATUS_ERROR);
-                    policy.addError("Missing/Incorrect BM Type");
-                    log.warn("No product mapping found for BM type: {} in companies: {}", 
-                        bmType, companyNumbers);
+                    policy.addError("No previous BM type found");
+                    log.warn("No previous BM type for policy: {}", policy.getPolNo());
+                } else if (homeowners.equalsIgnoreCase(prevBmType)) {
+                    policy.setStatus(DataConstants.TRANSACTION_STATUS_ERROR);
+                    policy.addError("The bmtype for the previous record was not properly set!");
+                    log.warn("Previous BM type was HOMEOWNERS for policy: {}", policy.getPolNo());
+                } else if (HSP.equals(prevBmType) || SLC.equals(prevBmType) || HSPSLC.equals(prevBmType)) {
+                    policy.getPolicyData().setEdibmtype(prevBmType);
+                    log.info("Updated BM type for policy {} to {}", policy.getPolNo(), prevBmType);
+                } else {
+                    policy.setStatus(DataConstants.TRANSACTION_STATUS_ERROR);
+                    policy.addError("The bmtype for the previous record was wrong!");
+                    log.warn("Invalid previous BM type {} for policy: {}", prevBmType, policy.getPolNo());
                 }
-                policy.setProductId(productId);
-            } else {
-                policy.setStatus(DataConstants.TRANSACTION_STATUS_ERROR);
-                policy.addError("Missing BM Type");
-                log.warn("Null BM type for policy: {}", policy.getPolNo());
             }
         });
     }
