@@ -228,3 +228,170 @@ public class LocationValueFinder {
         return buildingValue + contentsValue;
     }
 }
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+    /**
+ * Models for the domain objects
+ */
+@Data
+class Policy {
+    private String recno;
+    private String trnCode;
+    private String companyNo;
+    private List<Location> locations;
+}
+
+@Data
+class Location {
+    private String businessCode;
+    private double limitValue;
+}
+
+@Data
+class BusinessCode {
+    private String code;
+    private String companyNo;
+}
+
+/**
+ * Service to check policy validity regarding locations and business codes.
+ * Returns 1 if valid, 0 if invalid.
+ */
+public class PolicyValidator {
+    private final Logger log = LoggerFactory.getLogger(PolicyValidator.class);
+    
+    /**
+     * Checks if a policy has valid locations and business codes.
+     * For transaction codes 1 (New) or 3 (Renewal):
+     * - Verifies that policy has at least one location
+     * - Verifies that all locations have valid business codes for the company
+     * 
+     * @param policy The policy to validate
+     * @param validBusinessCodes List of valid business codes for the company
+     * @return 1 if validation passes, 0 if validation fails
+     */
+    public int ebrPolicyCheck(Policy policy, List<BusinessCode> validBusinessCodes) {
+        try {
+            // Only validate for new business (1) or renewal (3)
+            if (!isTransactionValidForCheck(policy.getTrnCode())) {
+                return 1; // Pass validation for other transaction types
+            }
+
+            // Check if policy has locations
+            if (!hasLocations(policy)) {
+                logError(policy.getRecno(), "Missing Locations");
+                setHavingLocation(false);
+                return 0;
+            }
+
+            setHavingLocation(true);
+
+            // Check if all locations have valid business codes
+            if (!hasValidBusinessCodes(policy, validBusinessCodes)) {
+                logError(policy.getRecno(), "Missing/Invalid Location Business Codes");
+                return 0;
+            }
+
+            return 1; // All validations passed
+
+        } catch (Exception e) {
+            log.error("Error validating policy {}: {}", policy.getRecno(), e.getMessage());
+            return 0;
+        }
+    }
+
+    private boolean isTransactionValidForCheck(String trnCode) {
+        return "1".equals(trnCode) || "3".equals(trnCode);
+    }
+
+    private boolean hasLocations(Policy policy) {
+        return policy.getLocations() != null && !policy.getLocations().isEmpty();
+    }
+
+    private boolean hasValidBusinessCodes(Policy policy, List<BusinessCode> validBusinessCodes) {
+        Set<String> validCodes = validBusinessCodes.stream()
+            .filter(bc -> bc.getCompanyNo().equals(policy.getCompanyNo()))
+            .map(BusinessCode::getCode)
+            .collect(Collectors.toSet());
+
+        return policy.getLocations().stream()
+            .allMatch(location -> isValidBusinessCode(location, validCodes));
+    }
+
+    private boolean isValidBusinessCode(Location location, Set<String> validCodes) {
+        String businessCode = location.getBusinessCode();
+        return businessCode != null && validCodes.contains(businessCode);
+    }
+
+    private void logError(String recno, String message) {
+        log.error("Policy {}: {}", recno, message);
+        // Call your existing error logging mechanism
+        // ediLogUpdate(recno, "E", message);
+    }
+
+    private boolean isHavingLocation;
+
+    /**
+     * Sets whether the policy has locations
+     * @param value true if policy has locations, false otherwise
+     */
+    private void setHavingLocation(boolean value) {
+        this.isHavingLocation = value;
+    }
+
+    /**
+     * Gets whether the policy has locations
+     * @return true if policy has locations, false otherwise
+     */
+    public boolean isHavingLocation() {
+        return this.isHavingLocation;
+    }
+}
+
+/**
+ * Example usage
+ */
+class Example {
+    void demonstrateUsage() {
+        // Create sample data
+        Policy policy = new Policy();
+        policy.setRecno("12345");
+        policy.setTrnCode("1");  // New business
+        policy.setCompanyNo("19");
+        policy.setLocations(Arrays.asList(
+            createLocation("BC001", 100000.0),
+            createLocation("BC002", 200000.0)
+        ));
+
+        List<BusinessCode> validBusinessCodes = Arrays.asList(
+            createBusinessCode("BC001", "19"),
+            createBusinessCode("BC002", "19")
+        );
+
+        // Validate policy
+        PolicyValidator validator = new PolicyValidator();
+        int result = validator.ebrPolicyCheck(policy, validBusinessCodes);
+        
+        if (result == 1) {
+            System.out.println("Policy validation passed");
+        } else {
+            System.out.println("Policy validation failed");
+        }
+    }
+
+    private Location createLocation(String businessCode, double limitValue) {
+        Location location = new Location();
+        location.setBusinessCode(businessCode);
+        location.setLimitValue(limitValue);
+        return location;
+    }
+
+    private BusinessCode createBusinessCode(String code, String companyNo) {
+        BusinessCode businessCode = new BusinessCode();
+        businessCode.setCode(code);
+        businessCode.setCompanyNo(companyNo);
+        return businessCode;
+    }
+}
